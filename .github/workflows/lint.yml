@@ -1,0 +1,16 @@
+name: Arduino Lint
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Arduino Lint
+        uses: arduino/arduino-lint-action@v1
+        with:
+          compliance: strict # Akan gagal jika ada Error atau Warning
+          library-manager: submit # Pengecekan standar untuk mensubmit ulang/pertama kali (bukan update, karena belum ada di index)
