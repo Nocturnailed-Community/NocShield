@@ -1,0 +1,22 @@
+#######################################
+# Syntax Coloring Map For NocShield
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+NocShield	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+begin	KEYWORD2
+sendDeauth	KEYWORD2
+startCaptivePortal	KEYWORD2
+handleCaptivePortal	KEYWORD2
+startPacketMonitor	KEYWORD2
+stopPacketMonitor	KEYWORD2
+hashSHA256	KEYWORD2
+encryptAES	KEYWORD2
+decryptAES	KEYWORD2
+generateRandomNumber	KEYWORD2
