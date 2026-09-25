@@ -1,6 +1,7 @@
 # NocShield
 
 [![Arduino Lint](https://github.com/Nocturnailed-Community/NocShield/actions/workflows/lint.yml/badge.svg)](https://github.com/Nocturnailed-Community/NocShield/actions/workflows/lint.yml)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20099062.svg)](https://doi.org/10.5281/zenodo.20099062)
 
 *[Baca dokumentasi dalam Bahasa Indonesia (README_ID.md)](README_ID.md)*
 
