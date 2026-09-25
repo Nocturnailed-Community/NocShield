@@ -20,6 +20,13 @@ public:
     NocShield();
     ~NocShield();
 
+    // Rule-of-three fix: this class owns raw pointers (_dnsServer, _webServer).
+    // The compiler-generated copy constructor/assignment would shallow-copy
+    // those pointers, causing a double-free when both copies are destroyed.
+    // Disable copying until proper deep-copy or shared ownership is implemented.
+    NocShield(const NocShield&) = delete;
+    NocShield& operator=(const NocShield&) = delete;
+
     void begin();
 
     // Offensive Operations
@@ -47,7 +54,9 @@ private:
     const char* _portalHtml;
     
     String bytesToHex(const uint8_t* bytes, size_t length);
-    void hexToBytes(const String& hex, uint8_t* bytes, size_t length);
+    // BUG FIX: now returns false if `hex` is too short for `length` bytes,
+    // instead of silently producing garbage output.
+    bool hexToBytes(const String& hex, uint8_t* bytes, size_t length);
 };
 
 #endif // NOCSHIELD_H

@@ -42,6 +42,8 @@ Anda dapat menemukan beberapa contoh praktik langsung di menu **File** -> **Exam
 *   **Defensive:**
     *   `PacketMonitor`: Menangkap frame *Management* 802.11 secara mentah.
     *   `DeauthDetector`: Memicu alarm fisik (LED) ketika serangan Deauth terdeteksi.
+    *   `DeauthDetector_v2`: Sama seperti di atas, tapi menghitung deauth/disassoc **per MAC sumber** dan mendukung *whitelist* agar tidak salah alarm.
+    *   `ProbeRequestSniffer`: Mencatat secara pasif perangkat di sekitar yang mengirim *probe request* (SSID + MAC) untuk audit lingkungan Anda sendiri. Hanya mendengarkan — tidak pernah mengirim data apa pun.
 *   **SecureComms:**
     *   `SecureClient`: Menunjukkan cara melakukan *request* HTTPS yang aman menggunakan validasi Root CA.
     *   `HardwareCrypto`: Menunjukkan cara menggunakan fungsi enkripsi AES dan SHA dengan akselerasi *hardware*.
@@ -85,6 +87,15 @@ String hash = nocShield.hashSHA256("password_rahasia_saya");
 String encryptedHex = nocShield.encryptAES("Data Penting", aesKey, aesIV);
 String decryptedStr = nocShield.decryptAES(encryptedHex, aesKey, aesIV);
 ```
+
+## Changelog / Perbaikan Terbaru
+
+*   **`decryptAES()`**: memperbaiki bug *out-of-bounds read*/*underflow* yang bisa terjadi jika ciphertext kosong atau tidak valid, ditambah validasi panjang blok dan pengecekan hasil alokasi memori.
+*   **`encryptAES()`**, **`hashSHA256()`**: sekarang memeriksa kode kembalian dari fungsi `mbedtls_*` dan hasil alokasi memori, alih-alih melanjutkan begitu saja saat gagal.
+*   **`bytesToHex()` / `decryptAES()`**: membangun string hasil dengan `reserve()` di awal, bukan `+=` berulang kali, untuk mengurangi fragmentasi heap di ESP32.
+*   **`hexToBytes()`**: sekarang mengembalikan `bool` dan memvalidasi panjang input, tidak lagi diam-diam menghasilkan byte acak jika input tidak valid.
+*   Menambahkan penghapusan *copy constructor*/*assignment* pada `NocShield` (class ini memiliki pointer mentah secara internal; menyalin instance-nya sebelumnya berisiko *double-free*).
+*   Contoh defensif baru: `ProbeRequestSniffer` dan `DeauthDetector_v2` (lihat di atas).
 
 ## Kontribusi
 

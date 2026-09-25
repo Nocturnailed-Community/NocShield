@@ -1,4 +1,5 @@
 #include "NocShield.h"
+#include <new> // for std::nothrow, used to check heap allocations safely
 
 NocShield::NocShield() : _isMonitoring(false), _dnsServer(nullptr), _webServer(nullptr), _portalHtml(nullptr) {
 }
@@ -108,7 +109,11 @@ void NocShield::handleCaptivePortal() {
 // ---------------- Cryptography ----------------
 
 String NocShield::bytesToHex(const uint8_t* bytes, size_t length) {
-    String hexString = "";
+    // BUG FIX: repeated String += causes multiple heap reallocations
+    // (memory fragmentation risk on ESP32's small heap). Reserve the
+    // final size up front so the buffer is only allocated once.
+    String hexString;
+    hexString.reserve(length * 2);
     for (size_t i = 0; i < length; i++) {
         if (bytes[i] < 16) hexString += "0";
         hexString += String(bytes[i], HEX);
@@ -116,11 +121,18 @@ String NocShield::bytesToHex(const uint8_t* bytes, size_t length) {
     return hexString;
 }
 
-void NocShield::hexToBytes(const String& hex, uint8_t* bytes, size_t length) {
+bool NocShield::hexToBytes(const String& hex, uint8_t* bytes, size_t length) {
+    // BUG FIX: previously there was no check that `hex` actually contains
+    // enough characters for `length` bytes. A short/malformed hex string
+    // silently produced garbage bytes instead of failing loudly.
+    if (hex.length() < length * 2) {
+        return false;
+    }
     for (size_t i = 0; i < length; i++) {
         String byteString = hex.substring(i * 2, i * 2 + 2);
         bytes[i] = (uint8_t) strtol(byteString.c_str(), NULL, 16);
     }
+    return true;
 }
 
 uint32_t NocShield::generateRandomNumber() {
@@ -133,7 +145,16 @@ String NocShield::hashSHA256(const String& payload) {
     mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
 
     mbedtls_md_init(&ctx);
-    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 0);
+
+    // BUG FIX: mbedtls_md_setup()'s return value was previously ignored.
+    // If setup fails (e.g. out of memory), `ctx` is left unusable and the
+    // subsequent mbedtls_md_starts/update/finish calls would operate on
+    // an invalid context (undefined behavior / crash). Fail safely instead.
+    if (mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 0) != 0) {
+        mbedtls_md_free(&ctx);
+        return String();
+    }
+
     mbedtls_md_starts(&ctx);
     mbedtls_md_update(&ctx, (const unsigned char *)payload.c_str(), payload.length());
     mbedtls_md_finish(&ctx, shaResult);
@@ -145,26 +166,53 @@ String NocShield::hashSHA256(const String& payload) {
 String NocShield::encryptAES(const String& plaintext, const uint8_t* key, const uint8_t* iv) {
     mbedtls_aes_context aes;
     mbedtls_aes_init(&aes);
-    mbedtls_aes_setkey_enc(&aes, key, 256); // Assuming 256-bit key
+
+    // BUG FIX: mbedtls_aes_setkey_enc()'s return value was ignored. If the
+    // key setup fails, the AES context is left invalid and crypt_cbc()
+    // would operate on garbage state. Bail out cleanly instead.
+    if (mbedtls_aes_setkey_enc(&aes, key, 256) != 0) { // Assuming 256-bit key
+        mbedtls_aes_free(&aes);
+        return String();
+    }
 
     // PKCS#7 Padding
     size_t paddedLength = plaintext.length() + (16 - (plaintext.length() % 16));
-    uint8_t* paddedData = new uint8_t[paddedLength];
+
+    // BUG FIX: on most platforms plain `new` throws on failure, but ESP32's
+    // Arduino core builds with C++ exceptions disabled, so a failed `new`
+    // just returns nullptr instead of throwing. The original code never
+    // checked for this, which meant a low-memory condition could silently
+    // cause a null-pointer dereference a few lines later. Use std::nothrow
+    // and check both allocations explicitly.
+    uint8_t* paddedData = new (std::nothrow) uint8_t[paddedLength];
+    uint8_t* output = new (std::nothrow) uint8_t[paddedLength];
+    if (!paddedData || !output) {
+        delete[] paddedData;
+        delete[] output;
+        mbedtls_aes_free(&aes);
+        return String();
+    }
+
     memcpy(paddedData, plaintext.c_str(), plaintext.length());
-    
+
     uint8_t paddingValue = paddedLength - plaintext.length();
     for (size_t i = plaintext.length(); i < paddedLength; i++) {
         paddedData[i] = paddingValue;
     }
 
-    uint8_t* output = new uint8_t[paddedLength];
     uint8_t ivCopy[16];
     memcpy(ivCopy, iv, 16); // mbedtls modifies the IV!
 
-    mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, paddedLength, ivCopy, paddedData, output);
+    // BUG FIX: crypt_cbc()'s return value was ignored; only trust the
+    // output buffer (and hex-encode it) if encryption actually succeeded.
+    int cryptResult = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, paddedLength, ivCopy, paddedData, output);
     mbedtls_aes_free(&aes);
 
-    String result = bytesToHex(output, paddedLength);
+    String result;
+    if (cryptResult == 0) {
+        result = bytesToHex(output, paddedLength);
+    }
+
     delete[] paddedData;
     delete[] output;
 
@@ -172,29 +220,71 @@ String NocShield::encryptAES(const String& plaintext, const uint8_t* key, const 
 }
 
 String NocShield::decryptAES(const String& ciphertextHex, const uint8_t* key, const uint8_t* iv) {
+    // BUG FIX (main issue): the original code computed
+    //   output[ciphertextLength - 1]
+    // with no check that ciphertextLength > 0. Since ciphertextLength is a
+    // size_t (unsigned), an empty/odd-length hex string made this underflow
+    // to SIZE_MAX, causing a wild out-of-bounds read (and, on the unpadding
+    // loop, a huge unpaddedLength) -> crash / memory corruption.
+    if (ciphertextHex.length() == 0 || (ciphertextHex.length() % 2) != 0) {
+        return String();
+    }
+
     size_t ciphertextLength = ciphertextHex.length() / 2;
-    uint8_t* cipherData = new uint8_t[ciphertextLength];
-    hexToBytes(ciphertextHex, cipherData, ciphertextLength);
+
+    // BUG FIX: AES-CBC operates on whole 16-byte blocks. A ciphertext
+    // whose length isn't a multiple of the block size is malformed input;
+    // feeding it to mbedtls_aes_crypt_cbc() is undefined behavior.
+    if (ciphertextLength == 0 || (ciphertextLength % 16) != 0) {
+        return String();
+    }
+
+    uint8_t* cipherData = new (std::nothrow) uint8_t[ciphertextLength];
+    uint8_t* output = new (std::nothrow) uint8_t[ciphertextLength];
+    if (!cipherData || !output) {
+        delete[] cipherData;
+        delete[] output;
+        return String();
+    }
+
+    if (!hexToBytes(ciphertextHex, cipherData, ciphertextLength)) {
+        delete[] cipherData;
+        delete[] output;
+        return String();
+    }
 
     mbedtls_aes_context aes;
     mbedtls_aes_init(&aes);
-    mbedtls_aes_setkey_dec(&aes, key, 256); // Assuming 256-bit key
 
-    uint8_t* output = new uint8_t[ciphertextLength];
+    if (mbedtls_aes_setkey_dec(&aes, key, 256) != 0) { // Assuming 256-bit key
+        mbedtls_aes_free(&aes);
+        delete[] cipherData;
+        delete[] output;
+        return String();
+    }
+
     uint8_t ivCopy[16];
     memcpy(ivCopy, iv, 16); // mbedtls modifies the IV!
 
-    mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, ciphertextLength, ivCopy, cipherData, output);
+    int cryptResult = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, ciphertextLength, ivCopy, cipherData, output);
     mbedtls_aes_free(&aes);
 
-    // PKCS#7 Unpadding
-    uint8_t paddingValue = output[ciphertextLength - 1];
-    size_t unpaddedLength = ciphertextLength - paddingValue;
-    
-    String result = "";
-    if (paddingValue > 0 && paddingValue <= 16) {
-        for (size_t i = 0; i < unpaddedLength; i++) {
-            result += (char)output[i];
+    String result;
+    if (cryptResult == 0) {
+        // PKCS#7 Unpadding
+        uint8_t paddingValue = output[ciphertextLength - 1]; // safe: ciphertextLength >= 16 here
+        // BUG FIX: also verify paddingValue does not exceed the buffer
+        // length (a corrupted/wrong-key decryption can produce any byte
+        // value here); otherwise unpaddedLength would underflow again.
+        if (paddingValue > 0 && paddingValue <= 16 && paddingValue <= ciphertextLength) {
+            size_t unpaddedLength = ciphertextLength - paddingValue;
+            // BUG FIX: build the String in one shot instead of appending
+            // one character at a time (which repeatedly reallocates and
+            // fragments the heap on ESP32).
+            result.reserve(unpaddedLength);
+            for (size_t i = 0; i < unpaddedLength; i++) {
+                result += (char)output[i];
+            }
         }
     }
 

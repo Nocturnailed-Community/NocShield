@@ -42,6 +42,8 @@ You can find several hands-on examples under **File** -> **Examples** -> **NocSh
 *   **Defensive:**
     *   `PacketMonitor`: Captures raw 802.11 Management frames.
     *   `DeauthDetector`: Triggers an alarm when a Deauth attack is detected.
+    *   `DeauthDetector_v2`: Same alarm behavior, but tracks counts **per source MAC** and supports a whitelist to reduce false positives.
+    *   `ProbeRequestSniffer`: Passively logs nearby devices' Wi-Fi probe requests (SSID + MAC) for auditing your own environment. Read-only — it never transmits.
 *   **SecureComms:**
     *   `SecureClient`: Demonstrates secure HTTPS requests using Root CA validation.
     *   `HardwareCrypto`: Shows how to use hardware-accelerated AES and SHA functions.
@@ -85,6 +87,15 @@ String hash = nocShield.hashSHA256("my_secret_password");
 String encryptedHex = nocShield.encryptAES("Data", aesKey, aesIV);
 String decryptedStr = nocShield.decryptAES(encryptedHex, aesKey, aesIV);
 ```
+
+## Changelog / Recent Fixes
+
+*   **`decryptAES()`**: fixed an out-of-bounds read/underflow that could occur when given an empty or malformed ciphertext string, plus added block-size validation and heap-allocation checks.
+*   **`encryptAES()`**, **`hashSHA256()`**: now check `mbedtls_*` return codes and heap allocations instead of silently continuing on failure.
+*   **`bytesToHex()` / `decryptAES()`**: build result strings with `reserve()` up front instead of repeated `+=`, reducing heap fragmentation on ESP32.
+*   **`hexToBytes()`**: now returns `bool` and validates the input length instead of silently producing garbage bytes.
+*   Added deleted copy constructor/assignment to `NocShield` (it owns raw pointers internally; copying an instance previously risked a double-free).
+*   New defensive examples: `ProbeRequestSniffer` and `DeauthDetector_v2` (see above).
 
 ## Contributing
 
