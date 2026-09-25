@@ -13,4 +13,4 @@ jobs:
         uses: arduino/arduino-lint-action@v1
         with:
           compliance: strict # Akan gagal jika ada Error atau Warning
-          library-manager: submit # Pengecekan standar untuk mensubmit ulang/pertama kali (bukan update, karena belum ada di index)
+          library-manager: update # Karena library sudah ada di Arduino Library Manager index
